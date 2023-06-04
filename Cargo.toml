@@ -1,0 +1,9 @@
+[package]
+name = "exofmt"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+scroll = "0.11"
+scroll_derive = "0.11"
+bitflags = "2.2.1"
