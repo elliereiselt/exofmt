@@ -1,5 +1,7 @@
 // Start future `lib.rs`
-pub mod error;
+mod error;
+pub use error::*;
+
 pub mod leb128;
 pub mod mutf8;
 

@@ -2,7 +2,7 @@ use scroll::ctx::TryFromCtx;
 use scroll::{Endian, Pread};
 
 use crate::elf::gnu::common::HashHeader;
-use crate::error::Error;
+use crate::Error;
 use std::borrow::Cow;
 
 type Result<T> = std::result::Result<T, Error>;

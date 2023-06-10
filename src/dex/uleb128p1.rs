@@ -1,5 +1,5 @@
-use crate::error::Error;
 use crate::leb128;
+use crate::Error;
 use std::io::Read;
 
 type Result<T> = std::result::Result<T, Error>;

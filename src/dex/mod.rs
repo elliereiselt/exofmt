@@ -57,9 +57,9 @@ pub use debug_info_item::*;
 mod encoded_method;
 pub use encoded_method::*;
 
-use crate::error::Error;
 use crate::leb128;
 use crate::mutf8::MUTF8;
+use crate::Error;
 use scroll::{Endian, IOread};
 use std::borrow::Cow;
 use std::io::{Seek, SeekFrom};

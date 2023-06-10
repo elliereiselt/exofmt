@@ -55,7 +55,7 @@ pub use compressed::*;
 mod hash;
 pub use hash::*;
 
-use crate::error::Error;
+use crate::Error;
 use scroll::{Endian, IOread};
 use std::borrow::Cow;
 use std::io::{Seek, SeekFrom};
@@ -252,7 +252,7 @@ macro_rules! elf_io_reader_impl {
         use std::borrow::Cow;
         use std::io::{Seek, SeekFrom};
 
-        use crate::error::Error;
+        use crate::Error;
 
         type Result<T> = std::result::Result<T, Error>;
 

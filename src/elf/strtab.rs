@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::Error;
 use std::borrow::Cow;
 use std::collections::hash_map;
 use std::collections::HashMap;

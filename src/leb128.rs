@@ -1,6 +1,6 @@
 // TODO: I've copied and pasted this from an over year old Rust project I did when still learning rust
 //       It should probably be cleaned up... somehow.
-use crate::error::Error;
+use crate::Error;
 use num::{NumCast, PrimInt, Signed, Unsigned};
 use std::io::Read;
 use std::mem::size_of;
