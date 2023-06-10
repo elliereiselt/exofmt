@@ -56,7 +56,7 @@ stringable_consts_block! {
         /// NetBSD
         pub OSABI_NETBSD = 2;
         /// GNU/Linux
-        pub OSABI_GNU = 3;
+        pub OSABI_GNU = 3; // I hate this and agree with all threads from ~10 years ago when this was redefined. OASBI should have continued to refer to the _kernel_ while using notes to find userland. Whatever.
         /// GNU/Hurd
         pub OSABI_HURD = 4;
         /// Solaris
@@ -110,7 +110,6 @@ stringable_consts_block! {
 }
 
 // File types
-
 stringable_consts_block! {
     const stringable: u16 {
         /// Unknown object file type

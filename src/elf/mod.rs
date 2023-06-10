@@ -147,6 +147,11 @@ pub trait Reader<'a> {
     fn read_rel_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Rel]>>;
     fn read_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
     fn read_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
+
+    fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [u8]>>;
+
+    fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<StrTab<'a>>;
+    fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'a, [Sym]>>;
 }
 
 macro_rules! validate_section_header_overflow {
@@ -177,6 +182,25 @@ macro_rules! validate_program_header_overflow {
         if end >= $stream_len || overflow {
             Err(Error::Malformed(format!(
                 "Program offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
+                offset, size, $stream_len
+            )))
+        } else {
+            Ok(())
+        }
+    }};
+}
+
+macro_rules! validate_offset_overflow {
+    ($slice_offset:expr, $slice_size:expr, $stream_len:expr) => {{
+        assert!($slice_offset != 0);
+
+        let offset = $slice_offset;
+        let size = $slice_size;
+        let (end, overflow) = offset.overflowing_add(size);
+
+        if end >= $stream_len || overflow {
+            Err(Error::Malformed(format!(
+                "Bytes offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
                 offset, size, $stream_len
             )))
         } else {
@@ -277,8 +301,34 @@ macro_rules! io_read_program_as_array {
     }};
 }
 
+macro_rules! io_read_as_array {
+    ($reader:expr, $endianness:expr, $slice_size:expr, $read_index_type:ty, $insert_index_type:ty) => {{
+        let entsize = ::std::mem::size_of::<$read_index_type>();
+        let length = $slice_size / (entsize as u64);
+
+        if let Ok(length) = usize::try_from(length) {
+            let mut result: Vec<$insert_index_type> = Vec::with_capacity(length);
+
+            for _ in 0..length {
+                let value = $reader.ioread_with::<$read_index_type>($endianness)?;
+                result.push(<$insert_index_type>::from(value));
+            }
+
+            Ok(result)
+        } else {
+            Err(Error::TooManyArrayItems(format!(
+                "Attempted to parse array with `{}` items, more items than can fit in `usize` (`{}` max)",
+                length,
+                usize::MAX,
+            )))
+        }
+    }};
+}
+
+pub(crate) use io_read_as_array;
 pub(crate) use io_read_program_as_array;
 pub(crate) use io_read_section_as_array;
+pub(crate) use validate_offset_overflow;
 pub(crate) use validate_program_header_overflow;
 pub(crate) use validate_program_header_p_type_and_size;
 pub(crate) use validate_section_header_overflow;
@@ -710,6 +760,57 @@ macro_rules! elf_io_reader_impl {
                     crate::elf::RelR
                 )?))
             }
+
+            pub fn get_bytes(
+                &mut self,
+                table_offset: u64,
+                table_size: u64,
+            ) -> Result<Cow<'static, [u8]>> {
+                let offset = table_offset;
+                let size = table_size;
+                let (end, overflow) = offset.overflowing_add(size);
+
+                if end >= self.stream_len || overflow {
+                    Err(Error::Malformed(format!(
+                        "Bytes offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
+                        offset, size, self.stream_len
+                    )))
+                } else {
+                    self.reader.seek(SeekFrom::Start(offset))?;
+
+                    if let Ok(size) = usize::try_from(size) {
+                        let mut result: Vec<u8> = Vec::with_capacity(size);
+                        // Resize is a "safe" way to set length to what the capacity is
+                        result.resize(size, 0);
+                        self.reader.read_exact(&mut result)?;
+                        Ok(Cow::Owned(result))
+                    } else {
+                        Err(Error::TooManyArrayItems(format!(
+                            "Attempted to load the bytes with a size of `{}`, `usize` can only hold `{}` bytes", size, usize::MAX
+                        )))
+                    }
+                }
+            }
+
+            pub fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<crate::elf::StrTab<'static>> {
+                let strtab_bytes = self.get_bytes(table_offset, table_size)?;
+                Ok(crate::elf::StrTab::parse(strtab_bytes, 0)?)
+            }
+
+            pub fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [crate::elf::Sym]>> {
+                crate::elf::validate_offset_overflow!(table_offset, table_size, self.stream_len)?;
+
+                self.reader
+                    .seek(SeekFrom::Start(table_offset))?;
+
+                Ok(Cow::Owned(crate::elf::io_read_as_array!(
+                    self.reader,
+                    self.endianness,
+                    table_size,
+                    $Sym,
+                    crate::elf::Sym
+                )?))
+            }
         }
 
         impl<'a, TRead: IOread<Endian> + Seek> crate::elf::Reader<'static> for IoReader<'a, TRead> {
@@ -785,6 +886,18 @@ macro_rules! elf_io_reader_impl {
 
             fn read_relr_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelR]>> {
                 self.read_relr_section(section_header)
+            }
+
+            fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [u8]>> {
+                self.get_bytes(table_offset, table_size)
+            }
+
+            fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<crate::elf::StrTab<'static>> {
+                self.read_str_table(table_offset, table_size)
+            }
+
+            fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [crate::elf::Sym]>> {
+                self.read_sym_table(table_offset, table_size)
             }
         }
     };
