@@ -1,12 +1,3 @@
-// TODO: What is the point of writing? I don't have an answer to that at the moment. So I think what should be done is instead:
-//        - Create only `elf32::Reader` and `elf64::Reader`
-//        - Start using `Pread` and `Pwrite` instead of the current parsing shit...
-//        - Re-implement much of `elf32` and `elf64` in a generic `elf` format that can be converted to and from eachother (i.e. `elf64` to `elf`, `elf` to `elf64`, etc.)
-//        - Keep metadata in the generic ELF form, don't make anything "pretty"
-//        - Everything defined in `elf32` and `elf64` should NOT reference the fact that they are `Elf32` or `Elf64`. I.e. NO `Elf32SectionHeader`, YES `elf32::SectionHeader`.
-// TODO: If we follow the above plan, it SHOULD be relatively trivial to create `Elf32Writer` and `Elf64Writer` if we ever decide we need it.
-//       If this works, we should copy this plan to MACH-O, PE, DEX, and all other formats
-
 pub mod common;
 pub mod elf32;
 pub mod elf64;
@@ -66,10 +57,8 @@ pub use hash::*;
 
 use crate::error::Error;
 use scroll::{Endian, IOread};
-use std::{
-    borrow::Cow,
-    io::{Seek, SeekFrom},
-};
+use std::borrow::Cow;
+use std::io::{Seek, SeekFrom};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -95,7 +84,7 @@ pub fn get_elf_ident<TRead: IOread<scroll::Endian> + Seek>(reader: &mut TRead) -
         // Reset the position to prevent any potential issues with parsing after calling this function...
         reader.seek(SeekFrom::Start(reset_position))?;
 
-        Err(Error::InvalidMagicNumber(magic_number))
+        Err(Error::InvalidMagicNumber(u64::from(magic_number)))
     } else {
         let class = match reader.ioread_with::<u8>(scroll::BE)? {
             1 => ElfClass::Elf32,
@@ -157,7 +146,7 @@ impl Elf {
 
 // TODO: Maybe a `trait ByteReader` where you have associated `type`. E.g. `type TDyn: Into<Dyn>`
 
-pub trait Reader<'a> {
+pub trait IoReader<'a> {
     fn parse(&mut self) -> Result<Elf>;
 
     fn get_section_bytes(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [u8]>>;
@@ -176,17 +165,6 @@ pub trait Reader<'a> {
     fn parse_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
     fn parse_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
 }
-
-// TODO: I'm thinking the following macros (remember to `pub(crate) use <macro_name>`!):
-//        - `validate_section_header_info!(section_header, expected_sh_type)`
-//            - Check `expected_type` is valid
-//            - Validate we won't overflow while reading
-//            - Anything else?
-//        - `io_parse_section_as_array!(section_header, expected_type, index_type)`
-//            - Calls `validate_section_header_info!(section_header, expected_type)`
-//            - Validates we can even fit the entire section into memory (logically, not checking the free amount of memory left...)
-//            - Parses the section and returns it as a `Vec<index_type>`
-//       Maybe this would be better off in `crate::elf`? Still `pub(crate) use ...`
 
 macro_rules! validate_section_header_overflow {
     ($section_header:expr, $stream_len:expr) => {{

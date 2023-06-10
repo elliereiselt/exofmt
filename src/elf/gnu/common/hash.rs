@@ -1,3 +1,5 @@
+use scroll_derive::{IOread, IOwrite, Pread, Pwrite, SizeWith};
+
 // This is the piece that broke me and made me start hating GNU's developers for not fucking documenting their additions for a widely used section of the ELF file format.
 // As far as I can tell, it was finalzied in 2006. I was ten years old when they added this.
 // At the time of writing this, I am now 27 and it has been 17 YEARS that they could have, at any point in time, written formal documentation for this section.
@@ -9,9 +11,21 @@
 //
 // Ultimately, it was the more sanely written, much better documented code of LLVM that helped me the most with this.
 // If you ever want to know how GNU implements something my suggestion is to not look at GNU's code and look at a competitor that implements the exact same thing. They most likely have both implemented it better or actually documented it.
+#[repr(C)]
+#[derive(Debug, PartialEq, Pread, Pwrite, IOread, IOwrite, SizeWith)]
 pub struct HashHeader {
     pub nbuckets: u32,
     pub symndx: u32,
     pub maskwords: u32,
     pub shift2: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_header_size_check() {
+        assert_eq!(::std::mem::size_of::<HashHeader>(), 0x10);
+    }
 }

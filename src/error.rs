@@ -1,3 +1,4 @@
+use crate::mutf8;
 use std::error;
 use std::fmt;
 use std::io;
@@ -6,7 +7,9 @@ use std::io;
 pub enum Error {
     IOError(io::Error),
     ScrollError(scroll::Error),
-    InvalidMagicNumber(u32),
+    MUTF8Error(mutf8::Error),
+
+    InvalidMagicNumber(u64),
     Malformed(String),
     InvalidArguments(String),
     TooManyArrayItems(String),
@@ -17,6 +20,7 @@ impl error::Error for Error {
         match self {
             Error::IOError(io_error) => Some(io_error),
             Error::ScrollError(scroll_error) => Some(scroll_error),
+            Error::MUTF8Error(mutf8_error) => Some(mutf8_error),
             _ => None,
         }
     }
@@ -27,6 +31,7 @@ impl fmt::Display for Error {
         match self {
             Error::IOError(io_error) => write!(f, "{}", io_error),
             Error::ScrollError(scroll_error) => write!(f, "{}", scroll_error),
+            Error::MUTF8Error(mutf8_error) => write!(f, "{}", mutf8_error),
             Error::InvalidMagicNumber(value) => write!(f, "Invalid magic number: 0x{:x}", *value),
             Error::Malformed(message) => write!(f, "Malformed: {}", message),
             Error::InvalidArguments(message) => write!(f, "Invalid arguments: {}", message),
@@ -44,5 +49,11 @@ impl From<io::Error> for Error {
 impl From<scroll::Error> for Error {
     fn from(value: scroll::Error) -> Self {
         Self::ScrollError(value)
+    }
+}
+
+impl From<mutf8::Error> for Error {
+    fn from(value: mutf8::Error) -> Self {
+        Self::MUTF8Error(value)
     }
 }

@@ -1,8 +1,6 @@
 use crate::stringable_consts_blocks::option_stringable_consts_block;
 
 pub mod common;
-pub mod elf32;
-pub mod elf64;
 
 mod hash;
 pub use hash::*;
