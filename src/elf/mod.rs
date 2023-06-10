@@ -148,7 +148,7 @@ pub trait Reader<'a> {
     fn read_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
     fn read_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
 
-    fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [u8]>>;
+    fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'a, [u8]>>;
 
     fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<StrTab<'a>>;
     fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'a, [Sym]>>;
@@ -525,7 +525,7 @@ macro_rules! elf_io_reader_impl {
                 }
 
                 let strtab_bytes = self.get_section_bytes(&section_header)?;
-                Ok(crate::elf::StrTab::parse(strtab_bytes, 0)?)
+                Ok(crate::elf::StrTab::<'static>::parse(strtab_bytes, 0)?)
             }
 
             pub fn read_hash_section(
@@ -794,7 +794,7 @@ macro_rules! elf_io_reader_impl {
 
             pub fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<crate::elf::StrTab<'static>> {
                 let strtab_bytes = self.get_bytes(table_offset, table_size)?;
-                Ok(crate::elf::StrTab::parse(strtab_bytes, 0)?)
+                Ok(crate::elf::StrTab::<'static>::parse(strtab_bytes, 0)?)
             }
 
             pub fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [crate::elf::Sym]>> {
