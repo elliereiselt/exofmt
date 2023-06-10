@@ -129,21 +129,24 @@ pub trait Reader<'a> {
         e_shnum: u16,
     ) -> Result<Vec<SectionHeader>>;
 
+    fn get_program_bytes(&mut self, program_header: &ProgramHeader) -> Result<Cow<'a, [u8]>>;
+
+    fn read_dynamic_program(&mut self, program_header: &ProgramHeader) -> Result<Cow<'a, [Dyn]>>;
+
     fn get_section_bytes(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [u8]>>;
 
-    fn parse_str_table_section(&mut self, section_header: &SectionHeader) -> Result<StrTab<'a>>;
-    fn parse_sym_table_section(&mut self, section_header: &SectionHeader)
-        -> Result<Cow<'a, [Sym]>>;
-    fn parse_note_section(&mut self, section_header: &SectionHeader) -> Result<Note<'a>>;
-    fn parse_compressed_section(
+    fn read_str_table_section(&mut self, section_header: &SectionHeader) -> Result<StrTab<'a>>;
+    fn read_sym_table_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Sym]>>;
+    fn read_note_section(&mut self, section_header: &SectionHeader) -> Result<Note<'a>>;
+    fn read_compressed_section(
         &mut self,
         section_header: &SectionHeader,
     ) -> Result<CompressedSection<'a>>;
-    fn parse_dynamic_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Dyn]>>;
-    fn parse_hash_section(&mut self, section_header: &SectionHeader) -> Result<Hash<'a>>;
-    fn parse_rel_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Rel]>>;
-    fn parse_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
-    fn parse_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
+    fn read_dynamic_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Dyn]>>;
+    fn read_hash_section(&mut self, section_header: &SectionHeader) -> Result<Hash<'a>>;
+    fn read_rel_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Rel]>>;
+    fn read_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
+    fn read_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
 }
 
 macro_rules! validate_section_header_overflow {
@@ -154,7 +157,26 @@ macro_rules! validate_section_header_overflow {
 
         if end >= $stream_len || overflow {
             Err(Error::Malformed(format!(
-                "Symtab section offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
+                "Section offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
+                offset, size, $stream_len
+            )))
+        } else {
+            Ok(())
+        }
+    }};
+}
+
+macro_rules! validate_program_header_overflow {
+    ($program_header:expr, $stream_len:expr) => {{
+        assert!($program_header.p_offset != 0);
+
+        let offset = $program_header.p_offset as u64;
+        let size = $program_header.p_filesz;
+        let (end, overflow) = offset.overflowing_add(size as u64);
+
+        if end >= $stream_len || overflow {
+            Err(Error::Malformed(format!(
+                "Program offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
                 offset, size, $stream_len
             )))
         } else {
@@ -191,18 +213,33 @@ macro_rules! validate_section_header_sh_type_and_size {
     };
 }
 
+macro_rules! validate_program_header_p_type_and_size {
+    ($calling_function_name:literal, $program_header:expr, $expected_p_type:expr, $expected_p_type_str:literal, $stream_len:expr) => {
+        if $program_header.p_type != $expected_p_type {
+            Err(Error::InvalidArguments(format!(
+                "Invalid `program_header` passed to `{}`, expected `sh_type` of `{}` but found `{}`",
+                $calling_function_name,
+                $expected_p_type_str,
+                crate::elf::pt_to_str($program_header.p_type)
+            )))
+        } else {
+            crate::elf::validate_program_header_overflow!($program_header, $stream_len)
+        }
+    };
+}
+
 // TODO: For future proofing, it might be good to at least do a `debug_assert!($section_header.sh_entsize == entsize)`...
-macro_rules! io_parse_section_as_array {
-    ($reader:expr, $endianness:expr, $section_header:expr, $parse_index_type:ty, $insert_index_type:ty) => {{
-        let entsize = ::std::mem::size_of::<$parse_index_type>();
+macro_rules! io_read_section_as_array {
+    ($reader:expr, $endianness:expr, $section_header:expr, $read_index_type:ty, $insert_index_type:ty) => {{
+        let entsize = ::std::mem::size_of::<$read_index_type>();
         let length = $section_header.sh_size / (entsize as u64);
 
         if let Ok(length) = usize::try_from(length) {
             let mut result: Vec<$insert_index_type> = Vec::with_capacity(length);
 
             for _ in 0..length {
-                let relr_value = $reader.ioread_with::<$parse_index_type>($endianness)?;
-                result.push(<$insert_index_type>::from(relr_value));
+                let value = $reader.ioread_with::<$read_index_type>($endianness)?;
+                result.push(<$insert_index_type>::from(value));
             }
 
             Ok(result)
@@ -215,6 +252,38 @@ macro_rules! io_parse_section_as_array {
         }
     }};
 }
+
+macro_rules! io_read_program_as_array {
+    ($reader:expr, $endianness:expr, $program_header:expr, $read_index_type:ty, $insert_index_type:ty) => {{
+        let entsize = ::std::mem::size_of::<$read_index_type>();
+        let length = $program_header.p_filesz / (entsize as u64);
+
+        if let Ok(length) = usize::try_from(length) {
+            let mut result: Vec<$insert_index_type> = Vec::with_capacity(length);
+
+            for _ in 0..length {
+                let value = $reader.ioread_with::<$read_index_type>($endianness)?;
+                result.push(<$insert_index_type>::from(value));
+            }
+
+            Ok(result)
+        } else {
+            Err(Error::TooManyArrayItems(format!(
+                "Attempted to parse array with `{}` items, more items than can fit in `usize` (`{}` max)",
+                length,
+                usize::MAX,
+            )))
+        }
+    }};
+}
+
+pub(crate) use io_read_program_as_array;
+pub(crate) use io_read_section_as_array;
+pub(crate) use validate_program_header_overflow;
+pub(crate) use validate_program_header_p_type_and_size;
+pub(crate) use validate_section_header_overflow;
+pub(crate) use validate_section_header_sh_flags_and_size;
+pub(crate) use validate_section_header_sh_type_and_size;
 
 macro_rules! elf_io_reader_impl {
     (
@@ -254,6 +323,7 @@ macro_rules! elf_io_reader_impl {
             }
 
             pub fn read_header(&mut self) -> Result<crate::elf::Header> {
+                self.reader.seek(SeekFrom::Start(0))?;
                 Ok(self.reader.ioread_with::<$Header>(self.endianness)?.into())
             }
 
@@ -311,6 +381,58 @@ macro_rules! elf_io_reader_impl {
                 Ok(section_header.into())
             }
 
+            // Program parsing
+            pub fn get_program_bytes(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [u8]>> {
+                assert!(program_header.p_offset != 0);
+
+                let offset = program_header.p_offset as u64;
+                let size = program_header.p_filesz;
+                let (end, overflow) = offset.overflowing_add(size as u64);
+
+                if end >= self.stream_len || overflow {
+                    Err(Error::Malformed(format!(
+                        "Program offset of `{}` + size of `{}` is out of bounds for `{}` bytes",
+                        offset, size, self.stream_len
+                    )))
+                } else {
+                    self.reader.seek(SeekFrom::Start(offset))?;
+
+                    if let Ok(size) = usize::try_from(size) {
+                        let mut result: Vec<u8> = Vec::with_capacity(size);
+                        // Resize is a "safe" way to set length to what the capacity is
+                        result.resize(size, 0);
+                        self.reader.read_exact(&mut result)?;
+                        Ok(Cow::Owned(result))
+                    } else {
+                        Err(Error::TooManyArrayItems(format!(
+                            "Attempted to load the bytes of a program with a size of `{}`, `usize` can only hold `{}` bytes", size, usize::MAX
+                        )))
+                    }
+                }
+            }
+
+            pub fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+                crate::elf::validate_program_header_p_type_and_size!(
+                    "read_dynamic_program",
+                    program_header,
+                    crate::elf::PT_DYNAMIC,
+                    "PT_DYNAMIC",
+                    self.stream_len
+                )?;
+
+                self.reader
+                    .seek(SeekFrom::Start(program_header.p_offset))?;
+
+                Ok(Cow::Owned(crate::elf::io_read_program_as_array!(
+                    self.reader,
+                    self.endianness,
+                    program_header,
+                    $Dyn,
+                    crate::elf::Dyn
+                )?))
+            }
+
+            // Section parsing
             pub fn get_section_bytes(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
@@ -341,14 +463,13 @@ macro_rules! elf_io_reader_impl {
                 }
             }
 
-            // Section parsing
-            pub fn parse_str_table_section(
+            pub fn read_str_table_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<crate::elf::StrTab<'static>> {
                 if section_header.sh_type != crate::elf::SHT_STRTAB {
                     return Err(Error::InvalidArguments(format!(
-                        "Invalid `section_header` passed to `parse_str_table_section`, expected `sh_type` of `SHT_STRTAB` but found `{}`",
+                        "Invalid `section_header` passed to `read_str_table_section`, expected `sh_type` of `SHT_STRTAB` but found `{}`",
                         crate::elf::sht_to_str(section_header.sh_type)
                     )));
                 }
@@ -357,12 +478,12 @@ macro_rules! elf_io_reader_impl {
                 Ok(crate::elf::StrTab::parse(strtab_bytes, 0)?)
             }
 
-            pub fn parse_hash_section(
+            pub fn read_hash_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<crate::elf::Hash<'static>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_hash_section",
+                    "read_hash_section",
                     section_header,
                     crate::elf::SHT_HASH,
                     "SHT_HASH",
@@ -390,12 +511,12 @@ macro_rules! elf_io_reader_impl {
                 })
             }
 
-            pub fn parse_note_section(
+            pub fn read_note_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<crate::elf::Note<'static>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_section_note",
+                    "read_section_note",
                     section_header,
                     crate::elf::SHT_NOTE,
                     "SHT_NOTE",
@@ -431,12 +552,12 @@ macro_rules! elf_io_reader_impl {
                 })
             }
 
-            pub fn parse_sym_table_section(
+            pub fn read_sym_table_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<Cow<'static, [crate::elf::Sym]>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_sym_table_section",
+                    "read_sym_table_section",
                     section_header,
                     crate::elf::SHT_SYMTAB,
                     "SHT_SYMTAB",
@@ -446,7 +567,7 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_parse_section_as_array!(
+                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
@@ -455,12 +576,12 @@ macro_rules! elf_io_reader_impl {
                 )?))
             }
 
-            pub fn parse_compressed_section(
+            pub fn read_compressed_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<crate::elf::CompressedSection<'static>> {
                 crate::elf::validate_section_header_sh_flags_and_size!(
-                    "parse_compressed_section",
+                    "read_compressed_section",
                     section_header,
                     crate::elf::SHFlags::COMPRESSED,
                     "SHF_COMRESSED",
@@ -494,12 +615,12 @@ macro_rules! elf_io_reader_impl {
                 }
             }
 
-            pub fn parse_dynamic_section(
+            pub fn read_dynamic_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<Cow<'static, [crate::elf::Dyn]>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_dynamic_section",
+                    "read_dynamic_section",
                     section_header,
                     crate::elf::SHT_DYNAMIC,
                     "SHT_DYNAMIC",
@@ -509,7 +630,7 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_parse_section_as_array!(
+                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
@@ -518,12 +639,12 @@ macro_rules! elf_io_reader_impl {
                 )?))
             }
 
-            pub fn parse_rel_section(
+            pub fn read_rel_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<Cow<'static, [crate::elf::Rel]>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_rel_section",
+                    "read_rel_section",
                     section_header,
                     crate::elf::SHT_REL,
                     "SHT_REL",
@@ -533,7 +654,7 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_parse_section_as_array!(
+                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
@@ -542,12 +663,12 @@ macro_rules! elf_io_reader_impl {
                 )?))
             }
 
-            pub fn parse_rela_section(
+            pub fn read_rela_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<Cow<'static, [crate::elf::RelA]>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_rela_section",
+                    "read_rela_section",
                     section_header,
                     crate::elf::SHT_RELA,
                     "SHT_RELA",
@@ -557,7 +678,7 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_parse_section_as_array!(
+                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
@@ -566,12 +687,12 @@ macro_rules! elf_io_reader_impl {
                 )?))
             }
 
-            pub fn parse_relr_section(
+            pub fn read_relr_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<Cow<'static, [crate::elf::RelR]>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
-                    "parse_relr_section",
+                    "read_relr_section",
                     section_header,
                     crate::elf::SHT_RELR,
                     "SHT_RELR",
@@ -581,7 +702,7 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_parse_section_as_array!(
+                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
@@ -614,55 +735,59 @@ macro_rules! elf_io_reader_impl {
                 self.read_section_headers(e_shoff, e_shentsize, e_shnum)
             }
 
+            fn get_program_bytes(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [u8]>> {
+                self.get_program_bytes(program_header)
+            }
+
+            fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+                self.read_dynamic_program(program_header)
+            }
+
             fn get_section_bytes(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [u8]>> {
                 self.get_section_bytes(section_header)
             }
 
-            fn parse_str_table_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::StrTab<'static>> {
-                self.parse_str_table_section(section_header)
+            fn read_str_table_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::StrTab<'static>> {
+                self.read_str_table_section(section_header)
             }
 
-            fn parse_sym_table_section(&mut self, section_header: &crate::elf::SectionHeader)
+            fn read_sym_table_section(&mut self, section_header: &crate::elf::SectionHeader)
                 -> Result<Cow<'static, [crate::elf::Sym]>> {
-                self.parse_sym_table_section(section_header)
+                self.read_sym_table_section(section_header)
             }
 
-            fn parse_note_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Note<'static>> {
-                self.parse_note_section(section_header)
+            fn read_note_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Note<'static>> {
+                self.read_note_section(section_header)
             }
 
-            fn parse_compressed_section(
+            fn read_compressed_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
             ) -> Result<crate::elf::CompressedSection<'static>> {
-                self.parse_compressed_section(section_header)
+                self.read_compressed_section(section_header)
             }
 
-            fn parse_dynamic_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
-                self.parse_dynamic_section(section_header)
+            fn read_dynamic_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+                self.read_dynamic_section(section_header)
             }
 
-            fn parse_hash_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Hash<'static>> {
-                self.parse_hash_section(section_header)
+            fn read_hash_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Hash<'static>> {
+                self.read_hash_section(section_header)
             }
 
-            fn parse_rel_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Rel]>> {
-                self.parse_rel_section(section_header)
+            fn read_rel_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Rel]>> {
+                self.read_rel_section(section_header)
             }
 
-            fn parse_rela_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelA]>> {
-                self.parse_rela_section(section_header)
+            fn read_rela_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelA]>> {
+                self.read_rela_section(section_header)
             }
 
-            fn parse_relr_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelR]>> {
-                self.parse_relr_section(section_header)
+            fn read_relr_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelR]>> {
+                self.read_relr_section(section_header)
             }
         }
     };
 }
 
 pub(crate) use elf_io_reader_impl;
-pub(crate) use io_parse_section_as_array;
-pub(crate) use validate_section_header_overflow;
-pub(crate) use validate_section_header_sh_flags_and_size;
-pub(crate) use validate_section_header_sh_type_and_size;
