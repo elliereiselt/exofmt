@@ -583,7 +583,7 @@ macro_rules! elf_io_reader_impl {
                 n_desc.resize(note_header.n_descsz as usize, 0);
 
                 self.reader.read_exact(&mut n_name_bytes)?;
-                self.reader.read_exact(&mut n_name_bytes)?;
+                self.reader.read_exact(&mut n_desc)?;
 
                 let n_name = match String::from_utf8(n_name_bytes) {
                     Ok(string) => string,
