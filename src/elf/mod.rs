@@ -577,12 +577,18 @@ macro_rules! elf_io_reader_impl {
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
                 let note_header = self.reader.ioread_with::<crate::elf::common::NoteHeader>(self.endianness)?;
-                let mut n_name_bytes: Vec<u8> = Vec::with_capacity(note_header.n_namesz as usize);
-                n_name_bytes.resize(note_header.n_namesz as usize, 0);
+                // I'm doing `- 1` to get rid of the unneeded nul character
+                let n_name_len = note_header.n_namesz as usize - 1;
+                let mut n_name_bytes: Vec<u8> = Vec::with_capacity(n_name_len);
+                n_name_bytes.resize(n_name_len, 0);
                 let mut n_desc: Vec<u8> = Vec::with_capacity(note_header.n_descsz as usize);
                 n_desc.resize(note_header.n_descsz as usize, 0);
 
+                // Since I'm ignoring the nul character for `n_name_bytes`, we need to read that nul into something...
+                let mut nul_char = [0u8; 1];
+
                 self.reader.read_exact(&mut n_name_bytes)?;
+                self.reader.read_exact(&mut nul_char)?;
                 self.reader.read_exact(&mut n_desc)?;
 
                 let n_name = match String::from_utf8(n_name_bytes) {
