@@ -56,6 +56,12 @@ mod debug_info_item;
 pub use debug_info_item::*;
 mod encoded_method;
 pub use encoded_method::*;
+mod call_site_id_item;
+pub use call_site_id_item::*;
+mod method_handle_item;
+pub use method_handle_item::*;
+mod hiddenapi_flag;
+pub use hiddenapi_flag::*;
 
 use crate::leb128;
 use crate::mutf8::MUTF8;
@@ -80,6 +86,9 @@ pub struct Dex<'a> {
     pub field_ids: Vec<FieldIdItem>,
     pub method_ids: Vec<MethodIdItem>,
     pub class_defs: Vec<ClassDefItem>,
+    pub call_site_ids: Vec<CallSiteIdItem>,
+    pub method_handles: Vec<MethodHandleItem>,
+    pub data_section: Cow<'a, [u8]>,
 }
 
 /// Used to indicate that an index value is absent
@@ -142,37 +151,35 @@ pub const ACC_DECLARED_SYNCHRONIZED: u32 = 0x20000;
 
 pub trait Reader<'a> {
     fn read_header(&mut self) -> Result<Header>;
-    fn read_link_section(&mut self, link_size: u32, link_offset: u32) -> Result<Cow<'a, [u8]>>;
-    fn read_map_list(&mut self, map_offset: u32) -> Result<Vec<MapItem>>;
-    fn read_string_ids(
+    fn read_link_section_at(&mut self, link_size: u32, link_offset: u32) -> Result<Cow<'a, [u8]>>;
+    fn read_map_list_at(&mut self, map_offset: u32) -> Result<Vec<MapItem>>;
+    fn read_string_ids_at(
         &mut self,
         string_ids_size: u32,
         string_ids_offset: u32,
     ) -> Result<Vec<StringIdItem>>;
-    fn read_type_ids(
+    fn read_type_ids_at(
         &mut self,
         type_ids_size: u32,
         type_ids_offset: u32,
     ) -> Result<Vec<TypeIdItem>>;
-    fn read_proto_ids(
+    fn read_proto_ids_at(
         &mut self,
         proto_ids_size: u32,
         proto_ids_offset: u32,
     ) -> Result<Vec<ProtoIdItem>>;
-    fn read_type_list(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>>;
-    fn read_string_data_item(&mut self, string_data_offset: u32) -> Result<String>;
-    fn read_field_ids(
+    fn read_type_list_at(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>>;
+    fn read_string_data_item_at(&mut self, string_data_offset: u32) -> Result<String>;
+    fn read_field_ids_at(
         &mut self,
         field_ids_size: u32,
         field_ids_offset: u32,
     ) -> Result<Vec<FieldIdItem>>;
-    fn read_method_ids(
+    fn read_method_ids_at(
         &mut self,
         method_ids_size: u32,
         method_ids_offset: u32,
     ) -> Result<Vec<MethodIdItem>>;
-
-    fn read_encoded_value(&mut self) -> Result<EncodedValue>;
 }
 
 pub struct IoReader<'a, TRead: IOread<Endian> + Seek> {
@@ -181,11 +188,13 @@ pub struct IoReader<'a, TRead: IOread<Endian> + Seek> {
     pub stream_len: u64,
 }
 
-macro_rules! io_read_section_as_array {
+macro_rules! io_read_section_as_array_at {
     ($reader:expr, $endianness:expr, $section_size:expr, $section_offset:expr, $index_type:ty) => {{
         if $section_size > 0 {
             let section_size = $section_size as usize;
             let section_offset = u64::from($section_offset);
+
+            let current_offset = $reader.seek(SeekFrom::Current(0))?;
 
             $reader.seek(SeekFrom::Start(section_offset))?;
 
@@ -195,6 +204,8 @@ macro_rules! io_read_section_as_array {
                 section_items.push($reader.ioread_with::<$index_type>($endianness)?);
             }
 
+            $reader.seek(SeekFrom::Start(current_offset))?;
+
             Ok(section_items)
         } else {
             Ok(Vec::with_capacity(0))
@@ -202,10 +213,12 @@ macro_rules! io_read_section_as_array {
     }};
 }
 
-macro_rules! io_read_section_as_list {
+macro_rules! io_read_section_as_list_at {
     ($reader:expr, $endianness:expr, $section_offset:expr, $index_type:ty) => {{
         if $section_offset > 0 {
             let section_offset = u64::from($section_offset);
+
+            let current_offset = $reader.seek(SeekFrom::Current(0))?;
 
             $reader.seek(SeekFrom::Start(section_offset))?;
 
@@ -215,6 +228,8 @@ macro_rules! io_read_section_as_list {
             for _ in 0..size {
                 result_list.push($reader.ioread_with::<$index_type>($endianness)?);
             }
+
+            $reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(result_list)
         } else {
@@ -236,16 +251,45 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
     }
 
     pub fn read_dex(&mut self) -> Result<Dex> {
-        // TODO: This should be reorganized to read in the most common ordering for Dex files
+        self.reader.seek(SeekFrom::Start(0))?;
+
         let header = self.read_header()?;
-        let link_section = self.read_link_section(header.link_size, header.link_offset)?;
-        let map_list = self.read_map_list(header.map_offset)?;
-        let string_ids = self.read_string_ids(header.string_ids_size, header.string_ids_offset)?;
-        let type_ids = self.read_type_ids(header.type_ids_size, header.type_ids_offset)?;
-        let proto_ids = self.read_proto_ids(header.proto_ids_size, header.proto_ids_offset)?;
-        let field_ids = self.read_field_ids(header.field_ids_size, header.field_ids_offset)?;
-        let method_ids = self.read_method_ids(header.method_ids_size, header.method_ids_offset)?;
-        let class_defs = self.read_class_defs(header.class_defs_size, header.class_defs_offset)?;
+        let string_ids =
+            self.read_string_ids_at(header.string_ids_size, header.string_ids_offset)?;
+        let type_ids = self.read_type_ids_at(header.type_ids_size, header.type_ids_offset)?;
+        let proto_ids = self.read_proto_ids_at(header.proto_ids_size, header.proto_ids_offset)?;
+        let field_ids = self.read_field_ids_at(header.field_ids_size, header.field_ids_offset)?;
+        let method_ids =
+            self.read_method_ids_at(header.method_ids_size, header.method_ids_offset)?;
+        let mut class_defs =
+            self.read_class_defs_at(header.class_defs_size, header.class_defs_offset)?;
+        let link_section = self.read_link_section_at(header.link_size, header.link_offset)?;
+        let data_section = self.read_data_section_at(header.data_size, header.data_offset)?;
+        let map_list = self.read_map_list_at(header.map_offset)?;
+
+        let mut call_site_ids: Option<Vec<CallSiteIdItem>> = None;
+        let mut method_handles: Option<Vec<MethodHandleItem>> = None;
+
+        for map_item in &map_list {
+            if map_item.type_code == TYPE_CALL_SITE_ID_ITEM {
+                call_site_ids = Some(self.read_call_site_ids_at(map_item.size, map_item.offset)?);
+            } else if map_item.type_code == TYPE_METHOD_HANDLE_ITEM {
+                method_handles = Some(self.read_method_handles_at(map_item.size, map_item.offset)?);
+            } else if map_item.type_code == TYPE_HIDDENAPI_CLASS_DATA_ITEM {
+                self.read_hiddenapi_data_at(map_item.size, map_item.offset, &mut class_defs)?;
+            }
+        }
+
+        let call_site_ids = if let Some(call_site_ids) = call_site_ids {
+            call_site_ids
+        } else {
+            Vec::with_capacity(0)
+        };
+        let method_handles = if let Some(method_handles) = method_handles {
+            method_handles
+        } else {
+            Vec::with_capacity(0)
+        };
 
         Ok(Dex {
             header,
@@ -257,11 +301,16 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             field_ids,
             method_ids,
             class_defs,
+            call_site_ids,
+            method_handles,
+            data_section,
         })
     }
 
     pub fn read_header(&mut self) -> Result<Header> {
         // Start by reading everything as byte arrays until we know the "file endianness"
+        self.reader.seek(SeekFrom::Start(0))?;
+
         let mut magic = [0u8; 8];
         let mut checksum = [0u8; 4];
         let mut signature = [0u8; 20];
@@ -358,7 +407,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_link_section(
+    pub fn read_link_section_at(
         &mut self,
         link_size: u32,
         link_offset: u32,
@@ -370,9 +419,13 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             let mut result: Vec<u8> = Vec::with_capacity(link_size);
             result.resize(link_size, 0);
 
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader.seek(SeekFrom::Start(link_offset))?;
 
             self.reader.read_exact(&mut result)?;
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(Cow::Owned(result))
         } else {
@@ -380,11 +433,37 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_map_list(&mut self, map_offset: u32) -> Result<Vec<MapItem>> {
-        io_read_section_as_list!(self.reader, self.endianness, map_offset, MapItem)
+    pub fn read_data_section_at(
+        &mut self,
+        data_size: u32,
+        data_offset: u32,
+    ) -> Result<Cow<'static, [u8]>> {
+        if data_size > 0 {
+            let data_size = data_size as usize;
+            let data_offset = u64::from(data_offset);
+
+            let mut result: Vec<u8> = Vec::with_capacity(data_size);
+            result.resize(data_size, 0);
+
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
+            self.reader.seek(SeekFrom::Start(data_offset))?;
+
+            self.reader.read_exact(&mut result)?;
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
+            Ok(Cow::Owned(result))
+        } else {
+            Ok(Cow::Owned(Vec::with_capacity(0)))
+        }
     }
 
-    pub fn read_string_ids(
+    pub fn read_map_list_at(&mut self, map_offset: u32) -> Result<Vec<MapItem>> {
+        io_read_section_as_list_at!(self.reader, self.endianness, map_offset, MapItem)
+    }
+
+    pub fn read_string_ids_at(
         &mut self,
         string_ids_size: u32,
         string_ids_offset: u32,
@@ -392,6 +471,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         if string_ids_size > 0 {
             let string_ids_size = string_ids_size as usize;
             let string_ids_offset = u64::from(string_ids_offset);
+
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
 
             self.reader.seek(SeekFrom::Start(string_ids_offset))?;
 
@@ -402,17 +483,15 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::StringIdItem>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
                 let string_data_item =
-                    self.read_string_data_item(raw_string_id_item.string_data_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                    self.read_string_data_item_at(raw_string_id_item.string_data_offset)?;
 
                 string_id_items.push(StringIdItem {
                     string_data: string_data_item,
                 });
             }
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(string_id_items)
         } else {
@@ -420,12 +499,12 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_type_ids(
+    pub fn read_type_ids_at(
         &mut self,
         type_ids_size: u32,
         type_ids_offset: u32,
     ) -> Result<Vec<TypeIdItem>> {
-        io_read_section_as_array!(
+        io_read_section_as_array_at!(
             self.reader,
             self.endianness,
             type_ids_size,
@@ -434,7 +513,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         )
     }
 
-    pub fn read_proto_ids(
+    pub fn read_proto_ids_at(
         &mut self,
         proto_ids_size: u32,
         proto_ids_offset: u32,
@@ -442,6 +521,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         if proto_ids_size > 0 {
             let proto_ids_size = proto_ids_size as usize;
             let proto_ids_offset = u64::from(proto_ids_offset);
+
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
 
             self.reader.seek(SeekFrom::Start(proto_ids_offset))?;
 
@@ -452,11 +533,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::ProtoIdItem>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
-                let type_list = self.read_type_list(raw_proto_id_item.parameters_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                let type_list = self.read_type_list_at(raw_proto_id_item.parameters_offset)?;
 
                 proto_id_items.push(ProtoIdItem {
                     shorty_index: raw_proto_id_item.shorty_index,
@@ -465,14 +542,16 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                 });
             }
 
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
             Ok(proto_id_items)
         } else {
             Ok(Vec::with_capacity(0))
         }
     }
 
-    pub fn read_type_list(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>> {
-        io_read_section_as_list!(self.reader, self.endianness, type_list_offset, TypeItem)
+    pub fn read_type_list_at(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>> {
+        io_read_section_as_list_at!(self.reader, self.endianness, type_list_offset, TypeItem)
     }
 
     fn read_string_data(&mut self) -> Result<Vec<u8>> {
@@ -493,7 +572,9 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         Ok(output_buffer)
     }
 
-    pub fn read_string_data_item(&mut self, string_data_offset: u32) -> Result<String> {
+    pub fn read_string_data_item_at(&mut self, string_data_offset: u32) -> Result<String> {
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
         self.reader
             .seek(SeekFrom::Start(u64::from(string_data_offset)))?;
 
@@ -501,15 +582,17 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         let _ = leb128::decode_uleb128::<u32, TRead>(self.reader)?;
         let string_data = self.read_string_data()?;
 
+        self.reader.seek(SeekFrom::Start(current_offset))?;
+
         Ok(String::from_mutf8(&string_data)?)
     }
 
-    pub fn read_field_ids(
+    pub fn read_field_ids_at(
         &mut self,
         field_ids_size: u32,
         field_ids_offset: u32,
     ) -> Result<Vec<FieldIdItem>> {
-        io_read_section_as_array!(
+        io_read_section_as_array_at!(
             self.reader,
             self.endianness,
             field_ids_size,
@@ -518,12 +601,12 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         )
     }
 
-    pub fn read_method_ids(
+    pub fn read_method_ids_at(
         &mut self,
         method_ids_size: u32,
         method_ids_offset: u32,
     ) -> Result<Vec<MethodIdItem>> {
-        io_read_section_as_array!(
+        io_read_section_as_array_at!(
             self.reader,
             self.endianness,
             method_ids_size,
@@ -532,7 +615,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         )
     }
 
-    pub fn read_encoded_value(&mut self) -> Result<EncodedValue> {
+    fn read_encoded_value(&mut self) -> Result<EncodedValue> {
         let raw_value = self.reader.ioread_with::<u8>(self.endianness)?;
         let value_type = raw_value & 0x1f;
         let value_arg = raw_value >> 5;
@@ -661,7 +744,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_encoded_array(&mut self) -> Result<Vec<EncodedValue>> {
+    fn read_encoded_array(&mut self) -> Result<Vec<EncodedValue>> {
         let size: u32 = leb128::decode_uleb128(self.reader)?;
         let mut result: Vec<EncodedValue> = Vec::with_capacity(size as usize);
 
@@ -672,7 +755,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         Ok(result)
     }
 
-    pub fn read_encoded_annotation(&mut self) -> Result<EncodedAnnotation> {
+    fn read_encoded_annotation(&mut self) -> Result<EncodedAnnotation> {
         let type_index: u32 = leb128::decode_uleb128(self.reader)?;
         let size: u32 = leb128::decode_uleb128(self.reader)?;
         let mut elements: Vec<AnnotationElement> = Vec::with_capacity(size as usize);
@@ -687,18 +770,20 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_annotation_element(&mut self) -> Result<AnnotationElement> {
+    fn read_annotation_element(&mut self) -> Result<AnnotationElement> {
         let name_index: u32 = leb128::decode_uleb128(self.reader)?;
         let value = self.read_encoded_value()?;
 
         Ok(AnnotationElement { name_index, value })
     }
 
-    pub fn read_annotation_set_ref_list(
+    pub fn read_annotation_set_ref_list_at(
         &mut self,
         annotations_offset: u32,
     ) -> Result<Vec<Vec<AnnotationItem>>> {
         if annotations_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader
                 .seek(SeekFrom::Start(u64::from(annotations_offset)))?;
 
@@ -710,15 +795,13 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::AnnotationSetRefItem>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
                 let annotation_set_item =
-                    self.read_annotation_set_item(annotation_set_ref_item.annotations_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                    self.read_annotation_set_item_at(annotation_set_ref_item.annotations_offset)?;
 
                 result.push(annotation_set_item);
             }
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(result)
         } else {
@@ -726,11 +809,13 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_annotation_set_item(
+    pub fn read_annotation_set_item_at(
         &mut self,
         annotations_offset: u32,
     ) -> Result<Vec<AnnotationItem>> {
         if annotations_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader
                 .seek(SeekFrom::Start(u64::from(annotations_offset)))?;
 
@@ -742,15 +827,13 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::AnnotationOffsetItem>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
                 let annotation_item =
-                    self.read_annotation_item(annotation_off_item.annotation_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                    self.read_annotation_item_at(annotation_off_item.annotation_offset)?;
 
                 result.push(annotation_item);
             }
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(result)
         } else {
@@ -758,12 +841,16 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_annotation_item(&mut self, annotation_offset: u32) -> Result<AnnotationItem> {
+    pub fn read_annotation_item_at(&mut self, annotation_offset: u32) -> Result<AnnotationItem> {
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
         self.reader
             .seek(SeekFrom::Start(u64::from(annotation_offset)))?;
 
         let visibility = self.reader.ioread_with::<u8>(self.endianness)?;
         let annotation = self.read_encoded_annotation()?;
+
+        self.reader.seek(SeekFrom::Start(current_offset))?;
 
         Ok(AnnotationItem {
             visibility,
@@ -771,11 +858,13 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_annotations_directory_item(
+    pub fn read_annotations_directory_item_at(
         &mut self,
         annotations_offset: u32,
     ) -> Result<AnnotationsDirectoryItem> {
         if annotations_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader
                 .seek(SeekFrom::Start(u64::from(annotations_offset)))?;
 
@@ -795,12 +884,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::FieldAnnotation>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
                 let annotation_set_item =
-                    self.read_annotation_set_item(raw_field_annotation.annotations_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                    self.read_annotation_set_item_at(raw_field_annotation.annotations_offset)?;
 
                 field_annotations.push(FieldAnnotation {
                     field_index: raw_field_annotation.field_index,
@@ -813,12 +898,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::MethodAnnotation>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
                 let annotation_set_item =
-                    self.read_annotation_set_item(raw_method_annotation.annotations_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                    self.read_annotation_set_item_at(raw_method_annotation.annotations_offset)?;
 
                 method_annotations.push(MethodAnnotation {
                     method_index: raw_method_annotation.method_index,
@@ -831,12 +912,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::ParameterAnnotation>(self.endianness)?;
 
-                let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
-                let annotation_set_ref_list =
-                    self.read_annotation_set_ref_list(raw_parameter_annotation.annotations_offset)?;
-
-                self.reader.seek(SeekFrom::Start(current_offset))?;
+                let annotation_set_ref_list = self
+                    .read_annotation_set_ref_list_at(raw_parameter_annotation.annotations_offset)?;
 
                 parameter_annotations.push(ParameterAnnotation {
                     method_index: raw_parameter_annotation.method_index,
@@ -845,7 +922,9 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             }
 
             let class_annotations =
-                self.read_annotation_set_item(header.class_annotations_offset)?;
+                self.read_annotation_set_item_at(header.class_annotations_offset)?;
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
 
             Ok(AnnotationsDirectoryItem {
                 class_annotations,
@@ -863,8 +942,10 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
     }
 
-    pub fn read_code_item(&mut self, code_item_offset: u32) -> Result<CodeItem> {
+    pub fn read_code_item_at(&mut self, code_item_offset: u32) -> Result<CodeItem> {
         assert!(code_item_offset != 0);
+
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
 
         self.reader
             .seek(SeekFrom::Start(u64::from(code_item_offset)))?;
@@ -915,10 +996,12 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         }
 
         let debug_info_item = if code_item_header.debug_info_offset > 0 {
-            Some(self.read_debug_info_item(code_item_header.debug_info_offset)?)
+            Some(self.read_debug_info_item_at(code_item_header.debug_info_offset)?)
         } else {
             None
         };
+
+        self.reader.seek(SeekFrom::Start(current_offset))?;
 
         Ok(CodeItem {
             registers_size: code_item_header.registers_size,
@@ -929,7 +1012,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_encoded_catch_handler(&mut self) -> Result<EncodedCatchHandler> {
+    fn read_encoded_catch_handler(&mut self) -> Result<EncodedCatchHandler> {
         let size = leb128::decode_sleb128::<i32, TRead>(self.reader)?;
         let abs_size = size.abs() as usize;
         let mut handlers: Vec<EncodedTypeAddressPair> = Vec::with_capacity(abs_size);
@@ -950,7 +1033,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_encoded_type_addr_pair(&mut self) -> Result<EncodedTypeAddressPair> {
+    fn read_encoded_type_addr_pair(&mut self) -> Result<EncodedTypeAddressPair> {
         let type_index: u32 = leb128::decode_uleb128(self.reader)?;
         let address: u32 = leb128::decode_uleb128(self.reader)?;
 
@@ -960,8 +1043,10 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_debug_info_item(&mut self, debug_info_offset: u32) -> Result<DebugInfoItem> {
+    pub fn read_debug_info_item_at(&mut self, debug_info_offset: u32) -> Result<DebugInfoItem> {
         assert!(debug_info_offset != 0);
+
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
 
         self.reader
             .seek(SeekFrom::Start(u64::from(debug_info_offset)))?;
@@ -987,6 +1072,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             }
         }
 
+        self.reader.seek(SeekFrom::Start(current_offset))?;
+
         Ok(DebugInfoItem {
             line_start,
             parameters,
@@ -994,8 +1081,10 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_class_data_item(&mut self, class_data_offset: u32) -> Result<ClassDataItem> {
+    pub fn read_class_data_item_at(&mut self, class_data_offset: u32) -> Result<ClassDataItem> {
         assert!(class_data_offset != 0);
+
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
 
         self.reader
             .seek(SeekFrom::Start(u64::from(class_data_offset)))?;
@@ -1022,6 +1111,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                 $result_list.push(EncodedField {
                     field_index,
                     access_flags,
+                    hiddenapi_flag: None,
                 });
 
                 $last_field_index = field_index;
@@ -1036,11 +1126,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                 let code_offset: u32 = leb128::decode_uleb128(self.reader)?;
 
                 let code_item = if code_offset > 0 {
-                    let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
-                    let code_item = self.read_code_item(code_offset)?;
-
-                    self.reader.seek(SeekFrom::Start(current_offset))?;
+                    let code_item = self.read_code_item_at(code_offset)?;
 
                     Some(code_item)
                 } else {
@@ -1051,6 +1137,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     method_index,
                     access_flags,
                     code: code_item,
+                    hiddenapi_flag: None,
                 });
 
                 $last_method_index = method_index;
@@ -1081,6 +1168,8 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             read_encoded_method!(virtual_methods, last_virtual_method_index);
         }
 
+        self.reader.seek(SeekFrom::Start(current_offset))?;
+
         Ok(ClassDataItem {
             static_fields,
             instance_fields,
@@ -1089,12 +1178,14 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
         })
     }
 
-    pub fn read_class_defs(
+    pub fn read_class_defs_at(
         &mut self,
         class_defs_size: u32,
         class_defs_offset: u32,
     ) -> Result<Vec<ClassDefItem>> {
         if class_defs_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader
                 .seek(SeekFrom::Start(u64::from(class_defs_offset)))?;
 
@@ -1105,37 +1196,21 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                     .reader
                     .ioread_with::<raw::ClassDefItem>(self.endianness)?;
 
-                macro_rules! run_offset_call {
-                    ($func_call:expr) => {{
-                        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
-                        let result = $func_call;
-
-                        self.reader.seek(SeekFrom::Start(current_offset))?;
-
-                        result
-                    }};
-                }
-
-                let interfaces =
-                    run_offset_call!(self.read_type_list(raw_class_def_item.interfaces_offset))?;
+                let interfaces = self.read_type_list_at(raw_class_def_item.interfaces_offset)?;
                 let annotations = if raw_class_def_item.annotations_offset > 0 {
-                    Some(run_offset_call!(self.read_annotations_directory_item(
-                        raw_class_def_item.annotations_offset
-                    ))?)
-                } else {
-                    None
-                };
-                let class_data = if raw_class_def_item.class_data_offset > 0 {
-                    Some(run_offset_call!(
-                        self.read_class_data_item(raw_class_def_item.class_data_offset)
+                    Some(self.read_annotations_directory_item_at(
+                        raw_class_def_item.annotations_offset,
                     )?)
                 } else {
                     None
                 };
-                let static_values = run_offset_call!(
-                    self.read_encoded_array_item(raw_class_def_item.static_values_offset)
-                )?;
+                let class_data = if raw_class_def_item.class_data_offset > 0 {
+                    Some(self.read_class_data_item_at(raw_class_def_item.class_data_offset)?)
+                } else {
+                    None
+                };
+                let static_values =
+                    self.read_encoded_array_item_at(raw_class_def_item.static_values_offset)?;
 
                 result.push(ClassDefItem {
                     class_index: raw_class_def_item.class_index,
@@ -1149,19 +1224,160 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                 })
             }
 
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
             Ok(result)
         } else {
             Ok(Vec::with_capacity(0))
         }
     }
 
-    pub fn read_encoded_array_item(&mut self, item_offset: u32) -> Result<Vec<EncodedValue>> {
+    pub fn read_encoded_array_item_at(&mut self, item_offset: u32) -> Result<Vec<EncodedValue>> {
         if item_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             self.reader.seek(SeekFrom::Start(u64::from(item_offset)))?;
 
-            Ok(self.read_encoded_array()?)
+            let result = self.read_encoded_array()?;
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
+            Ok(result)
         } else {
             Ok(Vec::with_capacity(0))
+        }
+    }
+
+    pub fn read_call_site_ids_at(
+        &mut self,
+        call_site_ids_size: u32,
+        call_site_ids_offset: u32,
+    ) -> Result<Vec<CallSiteIdItem>> {
+        if call_site_ids_offset > 0 {
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
+            self.reader
+                .seek(SeekFrom::Start(u64::from(call_site_ids_offset)))?;
+
+            let mut result: Vec<CallSiteIdItem> = Vec::with_capacity(call_site_ids_size as usize);
+
+            for _ in 0..call_site_ids_size {
+                result.push(self.read_call_site_id_item()?);
+            }
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
+            Ok(result)
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
+    }
+
+    fn read_call_site_id_item(&mut self) -> Result<CallSiteIdItem> {
+        let call_site_offset = self.reader.ioread_with::<u32>(self.endianness)?;
+
+        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
+        let result = self.read_call_site_item_at(call_site_offset)?;
+
+        self.reader.seek(SeekFrom::Start(current_offset))?;
+
+        Ok(CallSiteIdItem { values: result })
+    }
+
+    pub fn read_call_site_item_at(&mut self, call_site_offset: u32) -> Result<Vec<EncodedValue>> {
+        self.read_encoded_array_item_at(call_site_offset)
+    }
+
+    pub fn read_method_handles_at(
+        &mut self,
+        method_handles_size: u32,
+        method_handles_offset: u32,
+    ) -> Result<Vec<MethodHandleItem>> {
+        io_read_section_as_array_at!(
+            self.reader,
+            self.endianness,
+            method_handles_size,
+            method_handles_offset,
+            MethodHandleItem
+        )
+    }
+
+    pub fn read_hiddenapi_data_at(
+        &mut self,
+        hiddenapi_size: u32,
+        hiddenapi_offset: u32,
+        class_defs: &mut Vec<ClassDefItem>,
+    ) -> Result<()> {
+        if hiddenapi_offset > 0 {
+            if hiddenapi_size != 1 {
+                return Err(Error::Malformed(format!(
+                    "Map list items of `TYPE_HIDDENAPI_CLASS_DATA_ITEM` should only have a size value of `1`, found `{}`",
+                    hiddenapi_size
+                )));
+            }
+
+            let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+            // Afaik `hiddenapi_offset` is the offset we are to use for the `offsets` list...
+            // I'm unsure, though, as the documentation for this is shit.
+            let hiddenapi_offset = u64::from(hiddenapi_offset);
+
+            self.reader
+                .seek(SeekFrom::Start(u64::from(hiddenapi_offset)))?;
+
+            // TODO: Maybe double check we don't overflow past this?
+            let _section_size = self.reader.ioread_with::<u32>(self.endianness)?;
+            // This is used for yet another `seek` operation when indexing `offsets` array.
+            // TODO: It might be more performant to request the bytes for this section and just handle it that way
+            //       rather than constant seeking. Only if it becomes a performance issue, of course.
+            let offsets_start_offset = u64::from(self.reader.ioread_with::<u32>(self.endianness)?);
+
+            for class_def in class_defs {
+                // Jump to the offset for this `class_index`...
+                self.reader.seek(SeekFrom::Start(
+                    offsets_start_offset
+                        + (u64::from(class_def.class_index) * (std::mem::size_of::<u32>() as u64)),
+                ))?;
+
+                let flags_offset = u64::from(self.reader.ioread_with::<u32>(self.endianness)?);
+
+                if flags_offset != 0 {
+                    if let Some(class_data) = &mut class_def.class_data {
+                        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
+
+                        self.reader
+                            .seek(SeekFrom::Start(hiddenapi_offset + flags_offset))?;
+
+                        for static_field in &mut class_data.static_fields {
+                            let flag: HiddenApiRestriction = leb128::decode_uleb128(self.reader)?;
+                            static_field.hiddenapi_flag = Some(flag);
+                        }
+
+                        for instance_field in &mut class_data.instance_fields {
+                            let flag: HiddenApiRestriction = leb128::decode_uleb128(self.reader)?;
+                            instance_field.hiddenapi_flag = Some(flag);
+                        }
+
+                        for direct_method in &mut class_data.direct_methods {
+                            let flag: HiddenApiRestriction = leb128::decode_uleb128(self.reader)?;
+                            direct_method.hiddenapi_flag = Some(flag);
+                        }
+
+                        for virtual_method in &mut class_data.virtual_methods {
+                            let flag: HiddenApiRestriction = leb128::decode_uleb128(self.reader)?;
+                            virtual_method.hiddenapi_flag = Some(flag);
+                        }
+
+                        self.reader.seek(SeekFrom::Start(current_offset))?;
+                    }
+                }
+            }
+
+            self.reader.seek(SeekFrom::Start(current_offset))?;
+
+            Ok(())
+        } else {
+            Ok(())
         }
     }
 }
@@ -1171,67 +1387,63 @@ impl<'a, TRead: IOread<Endian> + Seek> Reader<'static> for IoReader<'a, TRead> {
         self.read_header()
     }
 
-    fn read_link_section(
+    fn read_link_section_at(
         &mut self,
         link_size: u32,
         link_offset: u32,
     ) -> Result<Cow<'static, [u8]>> {
-        self.read_link_section(link_size, link_offset)
+        self.read_link_section_at(link_size, link_offset)
     }
 
-    fn read_map_list(&mut self, map_offset: u32) -> Result<Vec<MapItem>> {
-        self.read_map_list(map_offset)
+    fn read_map_list_at(&mut self, map_offset: u32) -> Result<Vec<MapItem>> {
+        self.read_map_list_at(map_offset)
     }
 
-    fn read_string_ids(
+    fn read_string_ids_at(
         &mut self,
         string_ids_size: u32,
         string_ids_offset: u32,
     ) -> Result<Vec<StringIdItem>> {
-        self.read_string_ids(string_ids_size, string_ids_offset)
+        self.read_string_ids_at(string_ids_size, string_ids_offset)
     }
 
-    fn read_type_ids(
+    fn read_type_ids_at(
         &mut self,
         type_ids_size: u32,
         type_ids_offset: u32,
     ) -> Result<Vec<TypeIdItem>> {
-        self.read_type_ids(type_ids_size, type_ids_offset)
+        self.read_type_ids_at(type_ids_size, type_ids_offset)
     }
 
-    fn read_proto_ids(
+    fn read_proto_ids_at(
         &mut self,
         proto_ids_size: u32,
         proto_ids_offset: u32,
     ) -> Result<Vec<ProtoIdItem>> {
-        self.read_proto_ids(proto_ids_size, proto_ids_offset)
+        self.read_proto_ids_at(proto_ids_size, proto_ids_offset)
     }
 
-    fn read_type_list(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>> {
-        self.read_type_list(type_list_offset)
+    fn read_type_list_at(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>> {
+        self.read_type_list_at(type_list_offset)
     }
 
-    fn read_string_data_item(&mut self, string_data_offset: u32) -> Result<String> {
-        self.read_string_data_item(string_data_offset)
+    fn read_string_data_item_at(&mut self, string_data_offset: u32) -> Result<String> {
+        self.read_string_data_item_at(string_data_offset)
     }
 
-    fn read_field_ids(
+    fn read_field_ids_at(
         &mut self,
         field_ids_size: u32,
         field_ids_offset: u32,
     ) -> Result<Vec<FieldIdItem>> {
-        self.read_field_ids(field_ids_size, field_ids_offset)
+        self.read_field_ids_at(field_ids_size, field_ids_offset)
     }
 
-    fn read_method_ids(
+    fn read_method_ids_at(
         &mut self,
         method_ids_size: u32,
         method_ids_offset: u32,
     ) -> Result<Vec<MethodIdItem>> {
-        self.read_method_ids(method_ids_size, method_ids_offset)
-    }
-
-    fn read_encoded_value(&mut self) -> Result<EncodedValue> {
-        self.read_encoded_value()
+        self.read_method_ids_at(method_ids_size, method_ids_offset)
     }
 }

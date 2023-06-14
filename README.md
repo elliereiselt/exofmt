@@ -1,6 +1,6 @@
 # exofmt
 
-WARNING: This library is currently v0.0.1, meaning it is a WIP and will experience major changes. The goal is to create a `devel` branch once v0.1.0 is released and the ELF API is finalized. This also isn't yet a "library" as I'm testing using a `main.rs` that will also be removed once v0.1.0 is reached.
+WARNING: This library is currently v0.0.1, meaning it is a WIP and will experience major changes.
 
 exofmt is a binary format parser. A future goal is to implement binary format writing but this is not a priority at the moment.
 
