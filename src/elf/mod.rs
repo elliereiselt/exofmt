@@ -15,7 +15,6 @@ pub mod freebsd;
 pub mod gnu;
 pub mod hexagon;
 pub mod lanai;
-pub mod llvm;
 pub mod loongarch;
 pub mod m68k;
 pub mod mips;

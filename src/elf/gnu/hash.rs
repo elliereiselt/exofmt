@@ -1,3 +1,18 @@
+// exofmt - binary format parser for ELF, Dex, and more.
+// Copyright (C) 2023  Ellie Reiselt
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 use scroll::ctx::TryFromCtx;
 use scroll::{Endian, Pread};
 
@@ -14,10 +29,6 @@ pub struct HashTable<'a, TMaskword>
 where
     [TMaskword]: ToOwned,
 {
-    // /// Number of hash buckets
-    // ///
-    // /// I.e. `nbuckets == buckets.len()`
-    // pub nbuckets: u32,
     /// Start of the first symbol index within `.dynsym` that can be looked up with `.gnu.hash`
     ///
     /// I.e. `.dynsym[symndx..dynsymcount - 1]` symbols are sorted by the `gnu_hash` function using `gnu_hash(&.dynstr[s.st_name]) % nbuckets` values
@@ -47,6 +58,7 @@ where
 // TODO: I don't like this... but oh well.
 //       I kind of wish I could do a `HashTable::parse_32` and `HashTable::parse_64` but that would require testing to see if `TMaskword` can be replaced
 //       entirely with a `u64`... which I fucking hope it can.
+// TODO: I'm thinking more and more that parsing for OS and proc specific things should just be added to `Reader` and give the programmer the option to shoot themselves in the foot.
 impl<'a, 'b, TMaskword> HashTable<'a, TMaskword>
 where
     [TMaskword]: ToOwned,
