@@ -43,4 +43,11 @@ impl uleb128p1 {
             Ok(Self::Positive(result - 1))
         }
     }
+
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            uleb128p1::Positive(value) => *value,
+            uleb128p1::Negative => 0xffffffff,
+        }
+    }
 }

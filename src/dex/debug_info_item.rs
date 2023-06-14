@@ -13,7 +13,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-use crate::dex::uleb128p1::uleb128p1;
 use crate::stringable_consts_blocks::stringable_consts_block;
 
 pub struct DebugInfoItem {
@@ -21,7 +20,7 @@ pub struct DebugInfoItem {
     pub line_start: u32,
     /// String index of the method parameter name. An encoded value of NO_INDEX indicates that no name is
     /// available for the associated parameter. The type descriptor and signature are implied from the method descriptor and signature
-    pub parameters: Vec<uleb128p1>,
+    pub parameters: Vec<u32>,
     /// Actual bytecode for the state machine
     pub bytecode: Vec<u8>,
 }

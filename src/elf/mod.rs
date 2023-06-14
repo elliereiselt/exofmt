@@ -130,27 +130,34 @@ pub trait Reader<'a> {
 
     fn get_program_bytes(&mut self, program_header: &ProgramHeader) -> Result<Cow<'a, [u8]>>;
 
-    fn read_dynamic_program(&mut self, program_header: &ProgramHeader) -> Result<Cow<'a, [Dyn]>>;
+    fn read_dynamic_program(&mut self, program_header: &ProgramHeader) -> Result<Vec<Dyn>>;
 
     fn get_section_bytes(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [u8]>>;
 
     fn read_str_table_section(&mut self, section_header: &SectionHeader) -> Result<StrTab<'a>>;
-    fn read_sym_table_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Sym]>>;
+    fn read_sym_table_section(&mut self, section_header: &SectionHeader) -> Result<Vec<Sym>>;
     fn read_note_section(&mut self, section_header: &SectionHeader) -> Result<Note<'a>>;
     fn read_compressed_section(
         &mut self,
         section_header: &SectionHeader,
     ) -> Result<CompressedSection<'a>>;
-    fn read_dynamic_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Dyn]>>;
-    fn read_hash_section(&mut self, section_header: &SectionHeader) -> Result<Hash<'a>>;
-    fn read_rel_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [Rel]>>;
-    fn read_rela_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelA]>>;
-    fn read_relr_section(&mut self, section_header: &SectionHeader) -> Result<Cow<'a, [RelR]>>;
+    fn read_dynamic_section(&mut self, section_header: &SectionHeader) -> Result<Vec<Dyn>>;
+    fn read_hash_section(&mut self, section_header: &SectionHeader) -> Result<Hash>;
+    fn read_rel_section(&mut self, section_header: &SectionHeader) -> Result<Vec<Rel>>;
+    fn read_rela_section(&mut self, section_header: &SectionHeader) -> Result<Vec<RelA>>;
+    fn read_relr_section(&mut self, section_header: &SectionHeader) -> Result<Vec<RelR>>;
+
+    // GNU specific parsing
+    fn read_gnu_hash_table_section(
+        &mut self,
+        section_header: &SectionHeader,
+        dynsym_len: usize,
+    ) -> Result<gnu::HashTable>;
 
     fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'a, [u8]>>;
 
     fn read_str_table(&mut self, table_offset: u64, table_size: u64) -> Result<StrTab<'a>>;
-    fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'a, [Sym]>>;
+    fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Vec<Sym>>;
 }
 
 macro_rules! validate_section_header_overflow {
@@ -344,7 +351,9 @@ macro_rules! elf_io_reader_impl {
         $Dyn:ty,
         $Rel:ty,
         $RelA:ty,
-        $RelR:ty
+        $RelR:ty,
+
+        $GnuHashTable:ty,
     ) => {
         use scroll::{Endian, IOread};
         use std::borrow::Cow;
@@ -460,7 +469,7 @@ macro_rules! elf_io_reader_impl {
                 }
             }
 
-            pub fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+            pub fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Vec<crate::elf::Dyn>> {
                 crate::elf::validate_program_header_p_type_and_size!(
                     "read_dynamic_program",
                     program_header,
@@ -472,13 +481,13 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(program_header.p_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_program_as_array!(
+                Ok(crate::elf::io_read_program_as_array!(
                     self.reader,
                     self.endianness,
                     program_header,
                     $Dyn,
                     crate::elf::Dyn
-                )?))
+                )?)
             }
 
             // Section parsing
@@ -530,7 +539,7 @@ macro_rules! elf_io_reader_impl {
             pub fn read_hash_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<crate::elf::Hash<'static>> {
+            ) -> Result<crate::elf::Hash> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_hash_section",
                     section_header,
@@ -555,8 +564,8 @@ macro_rules! elf_io_reader_impl {
                 }
 
                 Ok(crate::elf::Hash {
-                    buckets: Cow::Owned(buckets),
-                    chains: Cow::Owned(chains),
+                    buckets,
+                    chains,
                 })
             }
 
@@ -610,7 +619,7 @@ macro_rules! elf_io_reader_impl {
             pub fn read_sym_table_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<Cow<'static, [crate::elf::Sym]>> {
+            ) -> Result<Vec<crate::elf::Sym>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_sym_table_section",
                     section_header,
@@ -622,13 +631,13 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
+                Ok(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
                     $Sym,
                     crate::elf::Sym
-                )?))
+                )?)
             }
 
             pub fn read_compressed_section(
@@ -673,7 +682,7 @@ macro_rules! elf_io_reader_impl {
             pub fn read_dynamic_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+            ) -> Result<Vec<crate::elf::Dyn>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_dynamic_section",
                     section_header,
@@ -685,19 +694,19 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
+                Ok(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
                     $Dyn,
                     crate::elf::Dyn
-                )?))
+                )?)
             }
 
             pub fn read_rel_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<Cow<'static, [crate::elf::Rel]>> {
+            ) -> Result<Vec<crate::elf::Rel>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_rel_section",
                     section_header,
@@ -709,19 +718,19 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
+                Ok(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
                     $Rel,
                     crate::elf::Rel
-                )?))
+                )?)
             }
 
             pub fn read_rela_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<Cow<'static, [crate::elf::RelA]>> {
+            ) -> Result<Vec<crate::elf::RelA>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_rela_section",
                     section_header,
@@ -733,19 +742,19 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
+                Ok(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
                     $RelA,
                     crate::elf::RelA
-                )?))
+                )?)
             }
 
             pub fn read_relr_section(
                 &mut self,
                 section_header: &crate::elf::SectionHeader,
-            ) -> Result<Cow<'static, [crate::elf::RelR]>> {
+            ) -> Result<Vec<crate::elf::RelR>> {
                 crate::elf::validate_section_header_sh_type_and_size!(
                     "read_relr_section",
                     section_header,
@@ -757,13 +766,31 @@ macro_rules! elf_io_reader_impl {
                 self.reader
                     .seek(SeekFrom::Start(section_header.sh_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_section_as_array!(
+                Ok(crate::elf::io_read_section_as_array!(
                     self.reader,
                     self.endianness,
                     section_header,
                     $RelR,
                     crate::elf::RelR
-                )?))
+                )?)
+            }
+
+            pub fn read_gnu_hash_table_section(
+                &mut self,
+                section_header: &crate::elf::SectionHeader,
+                dynsym_len: usize,
+            ) -> Result<crate::elf::gnu::HashTable> {
+                crate::elf::validate_section_header_sh_type_and_size!(
+                    "read_gnu_hash_table_section",
+                    section_header,
+                    crate::elf::gnu::SHT_GNU_HASH,
+                    "SHT_GNU_HASH",
+                    self.stream_len
+                )?;
+
+                self.reader.seek(SeekFrom::Start(section_header.sh_offset))?;
+
+                Ok(<$GnuHashTable>::parse(self.reader, self.endianness, dynsym_len)?)
             }
 
             pub fn get_bytes(
@@ -802,19 +829,19 @@ macro_rules! elf_io_reader_impl {
                 Ok(crate::elf::StrTab::<'static>::parse(strtab_bytes, 0)?)
             }
 
-            pub fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [crate::elf::Sym]>> {
+            pub fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Vec<crate::elf::Sym>> {
                 crate::elf::validate_offset_overflow!(table_offset, table_size, self.stream_len)?;
 
                 self.reader
                     .seek(SeekFrom::Start(table_offset))?;
 
-                Ok(Cow::Owned(crate::elf::io_read_as_array!(
+                Ok(crate::elf::io_read_as_array!(
                     self.reader,
                     self.endianness,
                     table_size,
                     $Sym,
                     crate::elf::Sym
-                )?))
+                )?)
             }
         }
 
@@ -845,7 +872,7 @@ macro_rules! elf_io_reader_impl {
                 self.get_program_bytes(program_header)
             }
 
-            fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+            fn read_dynamic_program(&mut self, program_header: &crate::elf::ProgramHeader) -> Result<Vec<crate::elf::Dyn>> {
                 self.read_dynamic_program(program_header)
             }
 
@@ -858,7 +885,7 @@ macro_rules! elf_io_reader_impl {
             }
 
             fn read_sym_table_section(&mut self, section_header: &crate::elf::SectionHeader)
-                -> Result<Cow<'static, [crate::elf::Sym]>> {
+                -> Result<Vec<crate::elf::Sym>> {
                 self.read_sym_table_section(section_header)
             }
 
@@ -873,24 +900,32 @@ macro_rules! elf_io_reader_impl {
                 self.read_compressed_section(section_header)
             }
 
-            fn read_dynamic_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Dyn]>> {
+            fn read_dynamic_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Vec<crate::elf::Dyn>> {
                 self.read_dynamic_section(section_header)
             }
 
-            fn read_hash_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Hash<'static>> {
+            fn read_hash_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<crate::elf::Hash> {
                 self.read_hash_section(section_header)
             }
 
-            fn read_rel_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::Rel]>> {
+            fn read_rel_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Vec<crate::elf::Rel>> {
                 self.read_rel_section(section_header)
             }
 
-            fn read_rela_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelA]>> {
+            fn read_rela_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Vec<crate::elf::RelA>> {
                 self.read_rela_section(section_header)
             }
 
-            fn read_relr_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Cow<'static, [crate::elf::RelR]>> {
+            fn read_relr_section(&mut self, section_header: &crate::elf::SectionHeader) -> Result<Vec<crate::elf::RelR>> {
                 self.read_relr_section(section_header)
+            }
+
+            fn read_gnu_hash_table_section(
+                &mut self,
+                section_header: &crate::elf::SectionHeader,
+                dynsym_len: usize,
+            ) -> Result<crate::elf::gnu::HashTable> {
+                self.read_gnu_hash_table_section(section_header, dynsym_len)
             }
 
             fn get_bytes(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [u8]>> {
@@ -901,7 +936,7 @@ macro_rules! elf_io_reader_impl {
                 self.read_str_table(table_offset, table_size)
             }
 
-            fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Cow<'static, [crate::elf::Sym]>> {
+            fn read_sym_table(&mut self, table_offset: u64, table_size: u64) -> Result<Vec<crate::elf::Sym>> {
                 self.read_sym_table(table_offset, table_size)
             }
         }

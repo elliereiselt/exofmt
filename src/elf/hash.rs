@@ -13,11 +13,9 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-use std::borrow::Cow;
-
-pub struct Hash<'a> {
-    pub buckets: Cow<'a, [u32]>,
-    pub chains: Cow<'a, [u32]>,
+pub struct Hash {
+    pub buckets: Vec<u32>,
+    pub chains: Vec<u32>,
 }
 
 pub fn generate_hash(name: &str) -> u32 {

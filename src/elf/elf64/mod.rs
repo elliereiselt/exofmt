@@ -37,5 +37,6 @@ crate::elf::elf_io_reader_impl!(
     Dyn,
     Rel,
     RelA,
-    RelR
+    RelR,
+    crate::elf::gnu::HashTable<u64>,
 );
