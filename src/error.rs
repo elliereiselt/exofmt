@@ -1,18 +1,19 @@
-// exofmt - binary format parser for ELF, Dex, and more.
-// Copyright (C) 2023  Ellie Reiselt
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published
-// by the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+/*
+ * Copyright 2023 Ellie Reiselt
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use crate::mutf8;
 use std::error;
 use std::fmt;
@@ -24,7 +25,8 @@ pub enum Error {
     ScrollError(scroll::Error),
     MUTF8Error(mutf8::Error),
 
-    InvalidMagicNumber(u64),
+    InvalidMagicNumber(Vec<u8>),
+    InvalidVersionNumber(String),
     Malformed(String),
     InvalidArguments(String),
     TooManyArrayItems(String),
@@ -47,7 +49,10 @@ impl fmt::Display for Error {
             Error::IOError(io_error) => write!(f, "{}", io_error),
             Error::ScrollError(scroll_error) => write!(f, "{}", scroll_error),
             Error::MUTF8Error(mutf8_error) => write!(f, "{}", mutf8_error),
-            Error::InvalidMagicNumber(value) => write!(f, "Invalid magic number: 0x{:x}", *value),
+            Error::InvalidMagicNumber(value) => write!(f, "Invalid magic number: 0x{:x?}", *value),
+            Error::InvalidVersionNumber(expected_version) => {
+                write!(f, "Invalid version number: expected {}", expected_version)
+            }
             Error::Malformed(message) => write!(f, "Malformed: {}", message),
             Error::InvalidArguments(message) => write!(f, "Invalid arguments: {}", message),
             Error::TooManyArrayItems(message) => write!(f, "Too many items: {}", message),

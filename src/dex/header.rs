@@ -1,18 +1,28 @@
-// exofmt - binary format parser for ELF, Dex, and more.
-// Copyright (C) 2023  Ellie Reiselt
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published
-// by the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+/*
+ * Copyright 2023 Ellie Reiselt
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use crate::Error;
+use scroll::Endian;
+use scroll::IOread;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Seek;
+
+type Result<T> = std::result::Result<T, Error>;
+
 #[repr(C)]
 pub struct Header {
     /// Magic number for the Dex file in the format of `dex\nVER\0` where `VER` is a value between `000` and `999`
@@ -32,7 +42,7 @@ pub struct Header {
     /// This field applies to ALL fields, including `checksum`, `file_size`, and `header_size`
     ///
     /// NOTE: Dex files will almost always be little endian. The only scenarios this may be untrue is with `.odex` but this too should be unlikely nowadays
-    pub endian_tag: u32,
+    pub endian_tag: [u8; 4],
     /// Size of the link section, or `0` if this file isn't statically linked
     pub link_size: u32,
     /// Offset from the start of the file to the link section, or `0` if `link_size == 0`. The offset, if non-zero, should be to an offset into the `link_data` section
@@ -79,8 +89,107 @@ mod tests {
     }
 }
 
+pub const MAGIC: [u8; 4] = [0x64, 0x65, 0x78, 0x0a];
+
 pub const ENDIAN_CONSTANT: u32 = 0x12345678;
 pub const REVERSE_ENDIAN_CONSTANT: u32 = 0x78563412;
 
 pub const ENDIAN_CONSTANT_BYTES: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
 pub const REVERSE_ENDIAN_CONSTANT_BYTES: [u8; 4] = [0x78, 0x56, 0x34, 0x12];
+
+impl Header {
+    pub fn read_from_buf_reader<TRead: IOread<Endian> + Seek>(
+        reader: &mut BufReader<TRead>,
+    ) -> Result<Header> {
+        let mut magic = [0u8; 8];
+        let mut checksum = [0u8; 4];
+        let mut signature = [0u8; 20];
+        let mut file_size = [0u8; 4];
+        let mut header_size = [0u8; 4];
+        let mut endian_tag = [0u8; 4];
+
+        reader.read_exact(&mut magic)?;
+
+        // I don't bother to validate the Dex version number but maybe we should... TBD
+        // We allow `dex` or `cdex`, the caller should double check this...
+        if (magic[0..4] != MAGIC && magic[0..4] != crate::dex::cdex::MAGIC) || magic[7] != 0 {
+            return Err(Error::InvalidMagicNumber(magic.to_vec()));
+        }
+
+        reader.read_exact(&mut checksum)?;
+        reader.read_exact(&mut signature)?;
+        reader.read_exact(&mut file_size)?;
+        reader.read_exact(&mut header_size)?;
+        reader.read_exact(&mut endian_tag)?;
+
+        let endianness = if endian_tag == REVERSE_ENDIAN_CONSTANT_BYTES {
+            Endian::Little
+        } else if endian_tag == ENDIAN_CONSTANT_BYTES {
+            Endian::Big
+        } else {
+            return Err(Error::Malformed(format!(
+                "Dex file `endian_tag` field malformed - found `{:02x?}` but expected `{:02x?}` or `{:02x?}`",
+                endian_tag, ENDIAN_CONSTANT_BYTES, REVERSE_ENDIAN_CONSTANT_BYTES,
+            )));
+        };
+
+        let checksum = if endianness.is_little() {
+            u32::from_le_bytes(checksum)
+        } else {
+            u32::from_be_bytes(checksum)
+        };
+        let file_size = if endianness.is_little() {
+            u32::from_le_bytes(file_size)
+        } else {
+            u32::from_be_bytes(file_size)
+        };
+        let header_size = if endianness.is_little() {
+            u32::from_le_bytes(header_size)
+        } else {
+            u32::from_be_bytes(header_size)
+        };
+        let link_size = reader.ioread_with::<u32>(endianness)?;
+        let link_offset = reader.ioread_with::<u32>(endianness)?;
+        let map_offset = reader.ioread_with::<u32>(endianness)?;
+        let string_ids_size = reader.ioread_with::<u32>(endianness)?;
+        let string_ids_offset = reader.ioread_with::<u32>(endianness)?;
+        let type_ids_size = reader.ioread_with::<u32>(endianness)?;
+        let type_ids_offset = reader.ioread_with::<u32>(endianness)?;
+        let proto_ids_size = reader.ioread_with::<u32>(endianness)?;
+        let proto_ids_offset = reader.ioread_with::<u32>(endianness)?;
+        let field_ids_size = reader.ioread_with::<u32>(endianness)?;
+        let field_ids_offset = reader.ioread_with::<u32>(endianness)?;
+        let method_ids_size = reader.ioread_with::<u32>(endianness)?;
+        let method_ids_offset = reader.ioread_with::<u32>(endianness)?;
+        let class_defs_size = reader.ioread_with::<u32>(endianness)?;
+        let class_defs_offset = reader.ioread_with::<u32>(endianness)?;
+        let data_size = reader.ioread_with::<u32>(endianness)?;
+        let data_offset = reader.ioread_with::<u32>(endianness)?;
+
+        Ok(Header {
+            magic,
+            checksum,
+            signature,
+            file_size,
+            header_size,
+            endian_tag,
+            link_size,
+            link_offset,
+            map_offset,
+            string_ids_size,
+            string_ids_offset,
+            type_ids_size,
+            type_ids_offset,
+            proto_ids_size,
+            proto_ids_offset,
+            field_ids_size,
+            field_ids_offset,
+            method_ids_size,
+            method_ids_offset,
+            class_defs_size,
+            class_defs_offset,
+            data_size,
+            data_offset,
+        })
+    }
+}

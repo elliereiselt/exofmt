@@ -8,16 +8,17 @@ The main use case for this library is to analyze the structures stored within a 
 
 For ELF, most if not all of the constants should be implemented for nearly every ABI published (or at least the ones I could find). Their respective types, not so much as that takes much longer to implement and verify. I will be slowly working my way to completing everything as I get interest.
 
-## Goals
+## Current Support
 
-- Priority support for ELF and Dex
-    - Next priority will then be ART, OAT, and VDEX
-    - Future plans for MACH-O and PE, though much less of a priority for my personal uses for the library currently.
-- Priority support for Android
-    - Existing libraries I looked at did not have any attempt at support for Android-specific ELF files. Android is my main purpose for loading ELF files, as such I'll prioritize Android before all other platforms.
-- Future plans for writing these formats
-    - Writing will most likely perform no validation
-    - Maybe future plans for validators? I'm unsure and getting ahead of myself here.
+This library currently has support for loading the following file types:
+
+- ELF
+- Dex
+- CDex (Compact Dex)
+- VDex
+    - Versions 006, 010, 019, 021, and 027
+    - Version 021 is untested. While VDex quickening was officially removed in Android 12, it appears that it was disabled in Android 10. I haven't been able to find a VDex file of this version that contains anything in the Dex section
+    - Version 027 is fully supported other than the `TypeLookupTable`. I don't need this table so if anyone else needs it, please submit a merge request with support for it. Otherwise, I may add support for it in the distant future.
 
 ## Limitations
 

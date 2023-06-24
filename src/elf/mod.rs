@@ -1,3 +1,19 @@
+/*
+ * Copyright 2023 Ellie Reiselt
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 pub mod common;
 pub mod elf32;
 pub mod elf64;
@@ -77,13 +93,14 @@ pub fn get_elf_ident<TRead: IOread<scroll::Endian> + Seek>(reader: &mut TRead) -
 
     reader.seek(SeekFrom::Start(0))?;
 
-    let magic_number = reader.ioread_with::<u32>(scroll::BE)?;
+    let mut magic_number = [0u8; 4];
+    reader.read_exact(&mut magic_number)?;
 
-    if magic_number != 0x7f454c46 {
+    if magic_number != [0x7f, 0x45, 0x4c, 0x46] {
         // Reset the position to prevent any potential issues with parsing after calling this function...
         reader.seek(SeekFrom::Start(reset_position))?;
 
-        Err(Error::InvalidMagicNumber(u64::from(magic_number)))
+        Err(Error::InvalidMagicNumber(magic_number.to_vec()))
     } else {
         let class = match reader.ioread_with::<u8>(scroll::BE)? {
             1 => ElfClass::Elf32,

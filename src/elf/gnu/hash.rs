@@ -1,18 +1,19 @@
-// exofmt - binary format parser for ELF, Dex, and more.
-// Copyright (C) 2023  Ellie Reiselt
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published
-// by the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+/*
+ * Copyright 2023 Ellie Reiselt
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 use scroll::ctx::{FromCtx, SizeWith};
 use scroll::{Endian, IOread};
 
@@ -25,10 +26,7 @@ type Result<T> = std::result::Result<T, Error>;
 // Documentation modified from: https://sourceware.org/legacy-ml/binutils/2006-10/msg00377.html
 //                         and: http://www.linker-aliens.org/blogs/ali/entry/gnu_hash_elf_sections/
 // Who knows how accurate anything is since it's been 17 years and no formal documentation has been released by the GNU team. Yes I'm angry. They first implemented this when I was 10 years old and 17 YEARS LATER they still have yet to write a formal specification for this.
-pub struct HashTable<TMaskword = u64>
-where
-    [TMaskword]: ToOwned,
-{
+pub struct HashTable<TMaskword = u64> {
     /// Start of the first symbol index within `.dynsym` that can be looked up with `.gnu.hash`
     ///
     /// I.e. `.dynsym[symndx..dynsymcount - 1]` symbols are sorted by the `gnu_hash` function using `gnu_hash(&.dynstr[s.st_name]) % nbuckets` values
@@ -61,7 +59,6 @@ where
 // TODO: I'm thinking more and more that parsing for OS and proc specific things should just be added to `Reader` and give the programmer the option to shoot themselves in the foot.
 impl<'a, TMaskword> HashTable<TMaskword>
 where
-    [TMaskword]: ToOwned,
     TMaskword: SizeWith<Endian>,
     TMaskword: FromCtx<Endian, [u8]>,
     u64: From<TMaskword>,
