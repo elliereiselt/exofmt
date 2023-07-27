@@ -30,7 +30,7 @@ pub enum EncodedValue {
     Type { type_id_index: u32 },
     Field { field_id_index: u32 },
     Method { method_id_index: u32 },
-    Enum { field_id_inex: u32 },
+    Enum { field_id_index: u32 },
     Array(Vec<EncodedValue>),
     Annotation(EncodedAnnotation),
     Null,
