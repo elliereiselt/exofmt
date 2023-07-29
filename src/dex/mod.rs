@@ -957,7 +957,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                 method_id_index: read_integer!(u32, 4, 0x00, "VALUE_METHOD")?,
             }),
             raw::VALUE_ENUM => Ok(EncodedValue::Enum {
-                field_id_inex: read_integer!(u32, 4, 0x00, "VALUE_ENUM")?,
+                field_id_index: read_integer!(u32, 4, 0x00, "VALUE_ENUM")?,
             }),
             // TODO: Should we confirm `value_arg` is `0`?
             raw::VALUE_ARRAY => Ok(EncodedValue::Array(self.read_encoded_array()?)),
