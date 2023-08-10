@@ -210,8 +210,9 @@ const DEX_STRING_DATA_ITEM_ALIGNMENT: u64 = 1;
 const DEX_ENCODED_ARRAY_ITEM_ALIGNMENT: u64 = 1;
 
 pub trait Reader<'a> {
-    // TODO: Should `read_dex` be added to this trait? I don't like it but it's needed for vdex unquickening...
-    // TODO: We should also add `read_cdex` and `read_into_dex`
+    fn read_dex(&mut self) -> Result<Dex<'a>>;
+    fn read_cdex(&mut self) -> Result<CDex<'a>>;
+
     fn read_header(&mut self) -> Result<Header>;
     fn read_cdex_header(&mut self) -> Result<cdex::Header>;
 
@@ -1817,6 +1818,14 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
 }
 
 impl<'a, TRead: IOread<Endian> + Seek> Reader<'static> for IoReader<'a, TRead> {
+    fn read_dex(&mut self) -> Result<Dex<'static>> {
+        self.read_dex()
+    }
+
+    fn read_cdex(&mut self) -> Result<CDex<'static>> {
+        self.read_cdex()
+    }
+
     fn read_header(&mut self) -> Result<Header> {
         self.read_header()
     }
