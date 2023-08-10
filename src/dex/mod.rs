@@ -1754,31 +1754,29 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             self.reader
                 .seek(SeekFrom::Start(self.data_start_offset + hiddenapi_offset))?;
 
+            // The offsets are meant to be relative to the start of the section, so I just grab
+            // whatever we set that to.
+            let section_start_offset = self.reader.seek(SeekFrom::Current(0))?;
+
             // TODO: Maybe double check we don't overflow past this?
             let _section_size = self.reader.ioread_with::<u32>(self.endianness)?;
-            // This is used for yet another `seek` operation when indexing `offsets` array.
-            // TODO: It might be more performant to request the bytes for this section and just handle it that way
-            //       rather than constant seeking. Only if it becomes a performance issue, of course.
-            let offsets_start_offset = u64::from(self.reader.ioread_with::<u32>(self.endianness)?);
+            let mut offsets: Vec<u32> = Vec::with_capacity(class_defs.len());
 
-            for class_def in class_defs {
-                // Jump to the offset for this `class_index`...
-                self.reader.seek(SeekFrom::Start(
-                    self.file_start_offset
-                        + offsets_start_offset
-                        + (u64::from(class_def.class_index) * (std::mem::size_of::<u32>() as u64)),
-                ))?;
+            for _ in 0..class_defs.len() {
+                offsets.push(self.reader.ioread_with::<u32>(self.endianness)?);
+            }
 
-                let flags_offset = u64::from(self.reader.ioread_with::<u32>(self.endianness)?);
+            // Google's documentation says that it's based on `class_idx`, implying the `class_idx`
+            // value stored in `ClassDefItem`. Google's documentation is a liar, it is actually the
+            // index of the class within the `class_def` section. These are two very distinct
+            // things.
+            for class_index in 0..class_defs.len() {
+                if offsets[class_index] != 0 {
+                    self.reader.seek(SeekFrom::Start(
+                        section_start_offset + u64::from(offsets[class_index]),
+                    ))?;
 
-                if flags_offset != 0 {
-                    if let Some(class_data) = &mut class_def.class_data {
-                        let current_offset = self.reader.seek(SeekFrom::Current(0))?;
-
-                        self.reader.seek(SeekFrom::Start(
-                            self.file_start_offset + hiddenapi_offset + flags_offset,
-                        ))?;
-
+                    if let Some(class_data) = &mut class_defs[class_index].class_data {
                         for static_field in &mut class_data.static_fields {
                             let flag: HiddenApiRestriction =
                                 leb128::decode_uleb128(&mut self.reader)?;
@@ -1802,8 +1800,6 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
                                 leb128::decode_uleb128(&mut self.reader)?;
                             virtual_method.hiddenapi_flag = Some(flag);
                         }
-
-                        self.reader.seek(SeekFrom::Start(current_offset))?;
                     }
                 }
             }
