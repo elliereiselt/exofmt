@@ -150,6 +150,7 @@ impl MUTF8 for String {
                                     result.push(byte0);
                                     result.push(byte1);
                                     result.push(byte2);
+                                    continue;
                                 }
                                 (0xED, 0xA0..=0xAF) => {
                                     // These are surrogate pairs...
@@ -174,6 +175,7 @@ impl MUTF8 for String {
                                                 }
 
                                                 commit_surrogate_pair!(byte1, byte2, byte4, byte5);
+                                                continue;
                                             }
                                         }
                                     }
