@@ -338,7 +338,7 @@ macro_rules! io_read_section_as_list_at {
             let mut result_list: Vec<$index_type> = Vec::with_capacity(size);
 
             for _ in 0..size {
-                // $io_reader.seek_round_up_alignment($alignment)?;
+                $io_reader.seek_round_up_alignment($alignment)?;
 
                 result_list.push($reader.ioread_with::<$index_type>($endianness)?);
             }
@@ -741,7 +741,7 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
             let mut proto_id_items: Vec<ProtoIdItem> = Vec::with_capacity(proto_ids_size);
 
             for _ in 0..proto_ids_size {
-                // self.seek_round_up_alignment(DEX_PROTO_ID_ITEM_ALIGNMENT)?;
+                self.seek_round_up_alignment(DEX_PROTO_ID_ITEM_ALIGNMENT)?;
 
                 let raw_proto_id_item = self
                     .reader
