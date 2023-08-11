@@ -326,7 +326,7 @@ macro_rules! io_read_section_as_array_at {
 }
 
 macro_rules! io_read_section_as_list_at {
-    ($io_reader:expr, $reader:expr, $endianness:expr, $alignment:expr, $file_start_offset:expr, $section_offset:expr, $index_type:ty) => {{
+    ($reader:expr, $endianness:expr, $file_start_offset:expr, $section_offset:expr, $index_type:ty) => {{
         if $section_offset > 0 {
             let section_offset = u64::from($section_offset);
 
@@ -338,8 +338,6 @@ macro_rules! io_read_section_as_list_at {
             let mut result_list: Vec<$index_type> = Vec::with_capacity(size);
 
             for _ in 0..size {
-                $io_reader.seek_round_up_alignment($alignment)?;
-
                 result_list.push($reader.ioread_with::<$index_type>($endianness)?);
             }
 
@@ -658,10 +656,10 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
 
     pub fn read_map_list_at(&mut self, map_offset: u32) -> Result<Vec<MapItem>> {
         io_read_section_as_list_at!(
-            self,
+            // self,
             self.reader,
             self.endianness,
-            DEX_MAP_LIST_ALIGNMENT,
+            // DEX_MAP_LIST_ALIGNMENT,
             self.data_start_offset,
             map_offset,
             MapItem
@@ -766,10 +764,10 @@ impl<'a, TRead: IOread<Endian> + Seek> IoReader<'a, TRead> {
 
     pub fn read_type_list_at(&mut self, type_list_offset: u32) -> Result<Vec<TypeItem>> {
         io_read_section_as_list_at!(
-            self,
+            // self,
             self.reader,
             self.endianness,
-            DEX_TYPE_LIST_ALIGNMENT,
+            // DEX_TYPE_LIST_ALIGNMENT,
             self.data_start_offset,
             type_list_offset,
             TypeItem
